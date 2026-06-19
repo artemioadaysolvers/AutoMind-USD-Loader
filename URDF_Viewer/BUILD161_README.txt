@@ -1,1 +1,0 @@
-BUILD161 clean minimal URDF+ viewer package. Includes only required runtime scripts; legacy/reference HTML/patch notes/USD files removed. Fixes no-fog solid render, uniform finite grid, tween camera focus for component clicks, and hard Show all render-mode restore.
