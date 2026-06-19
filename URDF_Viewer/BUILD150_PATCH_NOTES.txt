@@ -1,0 +1,10 @@
+BUILD150_UnifiedURDFPlusFullAdvancedUI
+- Single URDF+ entrypoint remains: URDF_Viewer/urdfplus_viewer_main.js.
+- No external standard-vs-plus split. Ordinary URDF is treated as URDF+ without extra constraints.
+- Preserves the proven unified URDFLoader visual path for standard URDF/URDF+ visual assembly.
+- Re-integrates ALL latest UI extras supplied by the user into the active unified path:
+  * ComponentsPanel with scaled/responsive dock, thumbnails, IA detail panel, show-all, isolate hooks.
+  * ToolsDock with custom selects, smooth render modes, explode spring, robot-only section plane, projection, animated Iso/Top/Front/Right views, grid/ground/shadows/axes, joint/loop toggles, snapshot.
+  * SelectionAndDrag with section-aware picking, invisible/transparent object non-pickability, hover overlays, selected checkbox isolation with 'i', joint drag adapter.
+- The same latest files are also placed at the top-level UI/core path for USD aliases.
+- jsDelivr-compatible ESM layout; no raw.githubusercontent usage in viewer code.
