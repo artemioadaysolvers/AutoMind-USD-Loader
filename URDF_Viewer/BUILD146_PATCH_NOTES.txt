@@ -1,7 +1,0 @@
-AutoMind URDF+ Viewer BUILD146
-
-- Applies the same +Z -> Y-up transform policy used by URDFPlus_Viewer_Reparado BUILD138.
-- Keeps Collada textures inline as base64 data URLs.
-- Adds BUILD138-style material readability fallback: white/black/no-map DAE materials are recolored per mesh instead of becoming a white silhouette.
-- Designed to run with the Python bridge using Three.js r164 ESM from jsDelivr, matching the standalone HTML importmap behavior.
-- Keeps modular ComponentsPanel, ToolsDock, SelectionAndDrag, joints, loops and couplings.
