@@ -1,4 +1,0 @@
-BUILD155_DynamicImportSafeUnifiedURDFPlus
-- urdfplus_viewer_main.js no static-imports large modules anymore. The public entrypoint can import safely from jsDelivr, then loads the unified URDF+ pipeline dynamically during render().
-- Keeps BUILD152/154 unified URDF+ behavior: base64 texture routing, thumbnails recovery, joint dragging, USD-like joint/loop display, model-sized grid, orthographic-safe depth, gradual show-all, and advanced ComponentsPanel/ToolsDock.
-- Sanitized JS to reduce risks from CDN/GitHub one-line transformations and line-comment corruption.
