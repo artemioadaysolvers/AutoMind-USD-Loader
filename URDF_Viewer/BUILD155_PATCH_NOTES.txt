@@ -1,0 +1,9 @@
+BUILD155_DIRECT_HTML_MECHANISM_BASE64_TEXTURES
+
+- Corrige BUILD154: el entrypoint ya no usa el core modular que armaba mal el gripper.
+- Tampoco vuelve al iframe: monta el HTML de referencia dentro del contenedor y ejecuta su script interno como módulo directo.
+- Se alimenta el visor con File objects creados desde URDF_Zip, urdfContent, assetDB, meshDB, textureDB, assets/filesDB y Base64Images.
+- Las texturas vuelven a resolverse como dataURL/base64/blob local igual que en el HTML: package://, data:model/*.jpg, basename, meshes/ y textures/.
+- Conserva el mecanismo interno del HTML que sí arma bien el gripper: applyUrdfRpy ZYX, árbol visual-safe, solver de loops/couplings y drag constrained realtime.
+- Alias urdf_viewer_main.js y usdplus_viewer_main.js redirigen al mismo entrypoint corregido.
+- Patch preventivo: core/URDFPlusCore.js usa RPY ZYX si alguien fuerza el core directamente.

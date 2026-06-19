@@ -1,0 +1,22 @@
+BUILD148_legacy_urdfloader_hybrid
+
+Fix target:
+- Standard URDF robots such as ANYmal/quadruped were assembling badly in the custom URDF+ parser, while the old HTML/old modular URDFLoader pipeline assembled them correctly.
+
+Changes:
+- Added a legacy URDFLoader visual pipeline under URDF_Viewer/legacy/ using the uploaded old modular scripts.
+- URDF_Viewer/urdfplus_viewer_main.js is now a hybrid entrypoint:
+  - Standard URDF with no URDF+ tags -> legacy URDFLoader pipeline.
+  - URDF+ files with loop/coupling/AutoMind metadata -> existing BUILD147 URDF+ core.
+- The legacy pipeline loads URDFLoader from jsDelivr at runtime, with no raw.githubusercontent.com.
+- Legacy AssetDB now accepts raw text, raw base64, and data:image/...;base64,... values from the current Python bridge.
+- Legacy DAE loading no longer applies a second manual <unit meter> scale.
+- The old AssetDB texture URLModifier is preserved to map Collada subresources to data URLs.
+- Theme was normalized to both nested and flat keys so ComponentsPanel/ToolsDock work.
+
+Use:
+- Upload the full URDF_Viewer/ folder to the GitHub repo.
+- Keep using compFile='URDF_Viewer/urdfplus_viewer_main.js'.
+- For standard URDFs, it will now use the old URDFLoader assembly path automatically.
+- To force the URDF+ custom parser: pass forceURDFPlusCore=True in opts.
+- To force legacy: pass forceLegacyURDFLoader=True in opts.
