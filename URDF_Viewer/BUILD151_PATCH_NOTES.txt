@@ -1,0 +1,13 @@
+BUILD151_UnifiedURDFPlusFullExtrasFix
+
+- Keeps one unified URDF+ entrypoint for both standard URDF and URDF+.
+- Restores missing advanced UI behavior in the active URDFLoader pipeline:
+  * finite model-sized grid based on 3D model bounds;
+  * orthographic camera safe near/far depth so grid is not clipped;
+  * Show all fades visibility gradually back to the current render mode opacity;
+  * component click isolates with smooth opacity tween and camera tween to Iso fitted to that component;
+  * Iso/Top/Front/Right use the selected/isolated part as the active fit target, falling back to full robot after Show all;
+  * Show Joints displays joint rotation/translation axes from URDFLoader joints;
+  * Show Loops draws URDF+ loop hints when loop link names are available;
+  * standard URDFLoader links are annotated with link-name/joint metadata so selection and joint drag can work again.
+- Keeps all advanced ComponentsPanel and ToolsDock files from BUILD150.
