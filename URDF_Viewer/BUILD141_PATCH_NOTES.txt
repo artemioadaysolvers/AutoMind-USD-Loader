@@ -1,0 +1,13 @@
+AutoMind URDF+ Viewer BUILD141
+
+Purpose:
+- Make the modular ZIP follow the repaired standalone HTML mechanism more strictly.
+
+Fixes:
+1. Visual-tree selection now matches BUILD138 HTML: the *_standard_tree_backup.urdf is used only if the main URDF+ tree is structurally unsafe, not merely because the backup exists. This fixes robots assembled from stale backup poses.
+2. DAE loading now follows the HTML path: ColladaLoader.load(url) with LoadingManager URL rewrite. The modular core no longer manually parses the DAE and no longer multiplies by <unit meter=...>, preventing double-scale/tiny/scattered parts.
+3. Texture preservation was hardened: valid data/blob texture image references are no longer deleted before browser decode finishes.
+4. Collada texture path resolver now handles data:model/base.jpg, blob-relative paths, meshes/, mesh/, textures/, texture/, and basename fallbacks like the HTML resolver.
+
+Kept:
+- Components panel, Viewer Tools / ToolsDock, selection, hover, thumbnails, render modes, section plane, show all, isolate, grid/ground/shadows, joint axes, loops, URDF+ couplings/loops.
