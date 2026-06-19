@@ -1,0 +1,6 @@
+BUILD143 patch notes
+
+1. Keeps BUILD142 modular entrypoints: no iframe, no standalone adapter.
+2. Keeps BUILD141 visual behavior synced with the repaired HTML BUILD138.
+3. Replaces three examples classic loader fallback URLs inside core/URDFPlusCore.js from npm/unpkg examples paths to jsDelivr GitHub three.js r132 paths.
+4. This avoids Colab ERR_TOO_MANY_REDIRECTS for https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/loaders/ColladaLoader.js.

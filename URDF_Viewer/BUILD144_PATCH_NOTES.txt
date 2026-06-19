@@ -1,0 +1,6 @@
+BUILD144 - Collada blob-relative texture fallback fix
+
+- Fixes Colab/Collada requests like blob:https://.../base.jpg, remote.jpg, face.jpg, handle.jpg and camera jpgs.
+- URLModifier now resolves fake blob-relative texture URLs by basename/suffix or returns an inline fallback texture before the browser issues a failing request.
+- Fallback textures are marked as broken during material sanitation so black placeholder Collada materials are repaired to visible CAD neutral material.
+- Keeps BUILD138/BUILD141 visual-tree logic, direct modular entrypoint, ComponentsPanel, ToolsDock, joints, loops and couplings.
