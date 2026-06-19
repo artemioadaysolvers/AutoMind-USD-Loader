@@ -1,0 +1,11 @@
+BUILD152_USD_MECHANISM_THUMBNAILS_URDFPLUS
+
+- Active URDF+ legacy pipeline now draws Show Joints exactly with the USD-style LineSegments overlay instead of ArrowHelper arrows.
+- Show Loops uses the same USD-style amber LineSegments batch and updates dynamically with the robot pose.
+- Component thumbnails were rebuilt to use the USD-style shared-renderer WebGLRenderTarget capture path:
+  * no early whole-robot clone that can miss late-loaded DAE meshes/textures;
+  * waits briefly for decoded texture maps;
+  * falls back to readable CAD material + edges instead of blank/white preview cards;
+  * supports on-demand regeneration after the first automatic thumbnail pass.
+- Legacy DAE texture resolution now treats malformed Collada paths such as data:model/base.jpg as relative texture paths and blocks fake file/blob requests with an inline transparent fallback.
+- Added texture MIME support for webp/bmp/gif/tga in the legacy asset database.

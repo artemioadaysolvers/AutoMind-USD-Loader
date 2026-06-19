@@ -1,0 +1,15 @@
+BUILD154_DIRECT_URDFPLUS_CORE_NO_IFRAME
+
+- URDF_Viewer/urdfplus_viewer_main.js deja de ser wrapper iframe/srcdoc.
+- El entrypoint ahora re-exporta directamente urdfplus_viewer_main_core.js.
+- Mantiene la firma publica render(opts), Base64Images y default { render }.
+- El mecanismo activo queda en el renderer modular real, no en URDFPlus_Viewer_Standalone_BUILD153.html.
+- Esto evita el diagnostico: "el modulo exporta render(opts), pero todavia es el adapter viejo con iframe/HTML standalone".
+
+Archivo clave a subir al repo:
+URDF_Viewer/urdfplus_viewer_main.js
+
+Contenido:
+  import { render, Base64Images } from './urdfplus_viewer_main_core.js';
+  export { render, Base64Images };
+  export default { render };
