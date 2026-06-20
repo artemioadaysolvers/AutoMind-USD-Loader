@@ -1,5 +1,0 @@
-BUILD180 validation
-- Solver upgraded: actuator driver excluded from loop variables; passive joints use damped least-squares with backtracking line search.
-- Connect loops receive axis alignment consistent with revolute-pin closure.
-- Flat PNG swatches are rendered as exact unlit RGB materials after verified image sampling.
-- Static JavaScript parse validation completed. Runtime model regression cannot run in CAAS due browser sandbox navigation restrictions.

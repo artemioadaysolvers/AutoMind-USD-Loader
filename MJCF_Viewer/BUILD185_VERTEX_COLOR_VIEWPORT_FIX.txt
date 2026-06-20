@@ -1,4 +1,0 @@
-AutoMind MJCF Viewer BUILD185 — vertex-color viewport texture bake
-
-Fixes Colab/Chromium cases where CanvasTexture displays correctly in a WebGLRenderTarget thumbnail but black in the default visible framebuffer.
-The main viewport now CPU-samples decoded CanvasTexture pixels through the OBJ UV attribute and renders the resulting baked vertex colors with MeshBasicMaterial. The original meshes remain pickable but are forced not to write colour/depth.
