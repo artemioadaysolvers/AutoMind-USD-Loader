@@ -1,0 +1,13 @@
+AutoMind MJCF Viewer BUILD174 validation
+
+Fixed Chromium/Colab WebGL2 errors:
+- Added a defensive uniform3fv compatibility adapter. Non-iterable Vector3/Color-like imported values are converted to Float32Array before the WebGL call; valid typed arrays are unchanged.
+- Added material-field sanitation for color/emissive/specular/normalScale fields before render.
+- Disabled automatic thumbnail warm-up by default. It is now opt-in with eagerThumbnails=True, avoiding re-entry into the visible renderer during texture upload.
+
+Fixed grid behavior:
+- Grid and ground matrices are frozen once after a valid robot loads.
+- Animation, browser resize, component selection, zoom and joint motion do not calculate bounds or change helper transforms.
+
+Static checks:
+- node --check must pass for every JavaScript module.
