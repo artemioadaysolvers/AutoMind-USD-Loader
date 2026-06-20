@@ -1,0 +1,36 @@
+AutoMind MJCF Viewer BUILD172 — validation notes
+==================================================
+
+Target fixes
+------------
+1. Component focus keeps PNG texture and base material color.
+2. Grid and ground remain fixed in the original world/CAD frame when joints move.
+
+Implemented changes
+-------------------
+- MJCFCore stamps each imported material with __automindTextureMap and
+  __automindBaseColor after the actual image has decoded.
+- applyMaterial explicitly retains the decoded map when assigning OBJ meshes.
+- Component isolation no longer performs a second material clone; imported MJCF
+  materials are already unique per visual mesh.
+- Every visibility/render-mode transition repairs the original texture binding
+  before opacity or transparency changes.
+- ViewerCore now exposes refreshRobotContext(), and direct MJCF loading invokes it.
+- refreshRobotContext freezes grid, ground, scale and placement once at load.
+- Per-frame grid maintenance never reads articulated robot bounds and does not
+  resize/recenter the grid or ground.
+- Orthographic camera clipping uses frozen dimensions only and no longer moves
+  the camera based on changing joint bounds.
+
+Validation performed
+--------------------
+- JavaScript syntax checked with Node.js v22.16.0 for all viewer .js files.
+- Robot_Gripper_MJCF asset database check: no texture references missing.
+- Static audit: keepGridInfiniteForView contains no getObjectBounds() and no
+  replaceGridIfNeeded() path after the grid has been frozen.
+
+Runtime note
+------------
+The viewer must be replaced in the repository path MJCF_Viewer/ used by the
+Colab bridge. A browser reload / new Colab output is required because jsDelivr
+may cache an older commit-specific module URL.
