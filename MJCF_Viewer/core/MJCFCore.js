@@ -1,0 +1,1176 @@
+// /XML_Viewer/core/MJCFCore.js
+// AutoMind BUILD179 MJCF loader.
+// - Awaited OBJ/PNG material loading (no white first frame)
+// - Explicit MJCF equality/joint ratios and physical equality/connect closures
+// - Loop anchors in both local body frames for Show Loops and DLS closure
+// - Per-geom visual roots so explode never translates a whole kinematic subtree
+
+/* global THREE */
+
+import { buildAssetDB, variantsFor, basenameNoQuery } from './AssetDB.js';
+import { buildURDFAssetDBFromOptions } from './URDFPlusCore.js';
+
+const EPS = 1e-10;
+const OBJ_LOADER_CDNS = [
+  'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r132/examples/js/loaders/OBJLoader.js'
+];
+
+function assertThree() {
+  if (typeof THREE === 'undefined') throw new Error('[MJCFCore] THREE is not defined. Load Three.js before rendering.');
+}
+function sleep(ms = 0) { return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0))); }
+function localName(n) { return String(n?.localName || n?.nodeName || '').replace(/^.*:/, '').toLowerCase(); }
+function childrenByName(node, name) { return Array.from(node?.children || []).filter(n => localName(n) === String(name).toLowerCase()); }
+function firstChild(node, name) { return childrenByName(node, name)[0] || null; }
+function parseNums(v, count = 0, fallback = 0) {
+  const a = String(v || '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+  const out = [];
+  const n = Math.max(count || a.length, 0);
+  for (let i = 0; i < n; i++) out.push(Number.isFinite(a[i]) ? a[i] : fallback);
+  return out;
+}
+function parseVec(v, fallback = [0, 0, 0]) {
+  const a = parseNums(v, 3, 0);
+  return a.length === 3 ? a : fallback.slice();
+}
+function parseQuat(v) {
+  const q = parseNums(v, 4, 0);
+  if (q.length !== 4) return [1, 0, 0, 0];
+  const n = Math.hypot(q[0], q[1], q[2], q[3]);
+  return n > EPS ? q.map(x => x / n) : [1, 0, 0, 0];
+}
+function boolAttr(node, key, fallback = false) {
+  const s = String(node?.getAttribute?.(key) || '').trim();
+  if (!s) return fallback;
+  return /^(1|true|yes|on)$/i.test(s);
+}
+function numAttr(node, key, fallback = 0) {
+  const n = Number(node?.getAttribute?.(key));
+  return Number.isFinite(n) ? n : fallback;
+}
+function colorFromRgba(v, fallback = [0.78, 0.82, 0.86, 1]) {
+  const a = parseNums(v, 4, 1);
+  return [a[0] ?? fallback[0], a[1] ?? fallback[1], a[2] ?? fallback[2], a[3] ?? fallback[3]];
+}
+function cleanPath(p) {
+  return String(p || '').trim().replace(/\\/g, '/').replace(/^\.?\//, '').replace(/^\/+/, '');
+}
+function xmlTextFromValue(v) {
+  if (v == null) return '';
+  const s = String(v);
+  if (/^data:[^,]+,/i.test(s)) {
+    const comma = s.indexOf(',');
+    const meta = s.slice(0, comma);
+    const payload = s.slice(comma + 1);
+    try {
+      if (/;base64/i.test(meta)) return new TextDecoder().decode(Uint8Array.from(atob(payload), c => c.charCodeAt(0)));
+      return decodeURIComponent(payload);
+    } catch (_) { return ''; }
+  }
+  if (/<mujoco[\s>]/i.test(s)) return s;
+  try { return atob(s.replace(/\s+/g, '')); } catch (_) { return ''; }
+}
+function assetText(raw, keys) {
+  for (const k0 of keys || []) {
+    for (const k of variantsFor(k0)) {
+      for (const [actual, value] of Object.entries(raw || {})) {
+        if (variantsFor(actual).includes(k)) {
+          const t = xmlTextFromValue(value);
+          if (t) return { key: actual, text: t };
+        }
+      }
+    }
+  }
+  return { key: '', text: '' };
+}
+function assetDataUrl(db, keys) {
+  for (const key of keys || []) {
+    const hit = db.get(key);
+    if (hit) return hit;
+  }
+  return '';
+}
+function assetCandidates(file, directory = '') {
+  const f = cleanPath(file);
+  const d = cleanPath(directory);
+  const base = basenameNoQuery(f);
+  const out = new Set([
+    f,
+    base,
+    `assets/${base}`,
+    `meshes/${base}`,
+    `mesh/${base}`,
+    `textures/${base}`,
+    `texture/${base}`,
+    `images/${base}`,
+    `materials/${base}`
+  ]);
+  if (d) {
+    out.add(`${d}/${f}`); out.add(`${d}/${base}`);
+    out.add(`${d}/assets/${base}`); out.add(`${d}/meshes/${base}`); out.add(`${d}/mesh/${base}`);
+    out.add(`${d}/textures/${base}`); out.add(`${d}/texture/${base}`);
+    out.add(`${d}/images/${base}`); out.add(`${d}/materials/${base}`);
+    const parent = d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '';
+    if (parent) {
+      out.add(`${parent}/${base}`);
+      out.add(`${parent}/textures/${base}`); out.add(`${parent}/texture/${base}`);
+      out.add(`${parent}/images/${base}`); out.add(`${parent}/materials/${base}`);
+    }
+  }
+  return Array.from(out);
+}
+async function loadClassicScriptOnce(src, timeoutMs = 12000) {
+  if (!src) throw new Error('Empty script source');
+  if (document.querySelector(`script[data-automind-src="${src}"]`) && window.OBJLoader) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.async = true; s.dataset.automindSrc = src;
+    const timer = setTimeout(() => reject(new Error('Timeout loading ' + src)), timeoutMs);
+    s.onload = () => { clearTimeout(timer); resolve(); };
+    s.onerror = () => { clearTimeout(timer); reject(new Error('Failed loading ' + src)); };
+    document.head.appendChild(s);
+  });
+}
+async function ensureObjLoader() {
+  if (THREE.OBJLoader) return;
+  let last = null;
+  for (const src of OBJ_LOADER_CDNS) {
+    try { await loadClassicScriptOnce(src); if (THREE.OBJLoader) return; }
+    catch (e) { last = e; }
+  }
+  throw (last || new Error('OBJLoader unavailable'));
+}
+function setPose(group, node) {
+  if (!group) return;
+  const p = parseVec(node?.getAttribute?.('pos'), [0, 0, 0]);
+  const q = parseQuat(node?.getAttribute?.('quat'));
+  group.position.set(p[0], p[1], p[2]);
+  group.quaternion.set(q[1], q[2], q[3], q[0]);
+  group.updateMatrix();
+}
+async function textureFromDataUrl(dataUrl, { flipY = true } = {}) {
+  if (!dataUrl) return null;
+  return await new Promise((resolve) => {
+    const image = new Image();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      if (!ok) { resolve(null); return; }
+      const tex = new THREE.Texture(image);
+
+      // OBJ/MTL and MJCF assets use the ordinary OpenGL/Three.js UV convention.
+      // The previous MJCF loader forced flipY=false (the GLTF/USD convention),
+      // which vertically mirrored texture atlases. On CAD exports where the
+      // opposite half of the atlas is transparent or black, this made every
+      // textured link appear black even though the image itself was present.
+      // Keep the normal Three.js behavior here; per-format overrides may still
+      // request flipY=false explicitly in the future.
+      tex.flipY = !!flipY;
+      tex.premultiplyAlpha = false;
+      tex.unpackAlignment = 4;
+      if ('colorSpace' in tex && THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+      else if ('encoding' in tex && THREE.sRGBEncoding) tex.encoding = THREE.sRGBEncoding;
+      tex.needsUpdate = true;
+      resolve(tex);
+    };
+    image.onload = () => finish(true);
+    image.onerror = () => finish(false);
+    image.src = dataUrl;
+    try {
+      if (image.decode) image.decode().then(() => finish(true)).catch(() => {});
+    } catch (_) {}
+  });
+}
+
+function colorIsAlmostBlack(color, threshold = 0.018) {
+  return !!(color && color.r <= threshold && color.g <= threshold && color.b <= threshold);
+}
+
+function cloneColorFromRgba(rgba) {
+  return new THREE.Color(rgba?.[0] ?? 0.78, rgba?.[1] ?? 0.82, rgba?.[2] ?? 0.86);
+}
+
+function textureRepeatFromDef(def) {
+  const v = Array.isArray(def?.texrepeat) ? def.texrepeat : [1, 1];
+  const x = Number.isFinite(v[0]) && v[0] !== 0 ? Math.abs(v[0]) : 1;
+  const y = Number.isFinite(v[1]) && v[1] !== 0 ? Math.abs(v[1]) : 1;
+  return [x, y];
+}
+
+function configureTextureForMaterial(tex, def) {
+  if (!tex) return tex;
+  const [rx, ry] = textureRepeatFromDef(def);
+  if (Math.abs(rx - 1) > EPS || Math.abs(ry - 1) > EPS) {
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(rx, ry);
+  }
+  tex.needsUpdate = true;
+  return tex;
+}
+function stampMaterialTextureState(mat) {
+  if (!mat) return mat;
+  mat.userData = mat.userData || {};
+  // Keep the original texture/color in userData. The component-isolation tween
+  // later changes opacity and can clone a material in other viewer modes. These
+  // references are the authoritative restoration state, never a white fallback.
+  if (mat.map) mat.userData.__automindTextureMap = mat.map;
+  if (mat.color?.clone && !mat.userData.__automindBaseColor) mat.userData.__automindBaseColor = mat.color.clone();
+  mat.userData.__automindTextureLocked = !!mat.map;
+  return mat;
+}
+async function makeMaterial(def, assetDB, geomNode = null) {
+  // In MJCF, a geom rgba can override the asset material colour. It should not
+  // multiply an already coloured CAD bitmap, but it remains the right fallback
+  // when the texture cannot be resolved.
+  const geomRgba = geomNode?.getAttribute?.('rgba');
+  const rgba = geomRgba ? colorFromRgba(geomRgba, [0.78, 0.82, 0.86, 1]) : colorFromRgba(def?.rgba, [0.78, 0.82, 0.86, 1]);
+  const requestedTexture = String(def?.texture || '').trim();
+  const candidates = Array.from(new Set([
+    ...(def?.textureCandidates || []),
+    ...(requestedTexture ? assetCandidates(requestedTexture, def?.texturedir || '') : [])
+  ]));
+  const texData = requestedTexture ? assetDataUrl(assetDB, candidates) : '';
+  const map = texData ? await textureFromDataUrl(texData, { flipY: def?.flipY !== false }) : null;
+
+  let mat;
+  if (map) {
+    configureTextureForMaterial(map, def);
+
+    // This matches the successful USD/URDF viewport policy: texture-painted CAD
+    // surfaces are rendered unlit in the inspection view. It guarantees that a
+    // valid texture cannot become a black silhouette merely because a standard
+    // material was evaluated under a weak/invalid light uniform in WebGL/Colab.
+    mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      map,
+      transparent: rgba[3] < 0.999,
+      opacity: rgba[3],
+      side: THREE.DoubleSide,
+      depthWrite: rgba[3] >= 0.999,
+      depthTest: true
+    });
+    mat.userData = {
+      ...(mat.userData || {}),
+      __automindTextureRequested: requestedTexture,
+      __automindTextureResolved: true,
+      __automindViewportNoFog: true,
+      __automindSourceRgba: rgba.slice()
+    };
+  } else {
+    const fallbackColor = cloneColorFromRgba(rgba);
+    // When an MJCF material asked for a texture but no image resolved, do not
+    // leave the part as a nearly-black silhouette. Match the USD/URDF viewer
+    // policy: prefer a visible neutral CAD fallback, and keep it unlit so weak
+    // lights or WebGL uniform issues cannot turn it black again.
+    if (requestedTexture) {
+      const luma = 0.2126 * fallbackColor.r + 0.7152 * fallbackColor.g + 0.0722 * fallbackColor.b;
+      if (colorIsAlmostBlack(fallbackColor) || luma < 0.12) fallbackColor.setHex(0xdfe8ea);
+      mat = new THREE.MeshBasicMaterial({
+        color: fallbackColor,
+        transparent: rgba[3] < 0.999,
+        opacity: rgba[3],
+        side: THREE.DoubleSide,
+        depthWrite: rgba[3] >= 0.999,
+        depthTest: true
+      });
+    } else {
+      mat = new THREE.MeshStandardMaterial({
+        color: fallbackColor,
+        roughness: 0.58,
+        metalness: 0.06,
+        transparent: rgba[3] < 0.999,
+        opacity: rgba[3],
+        side: THREE.DoubleSide,
+        depthWrite: rgba[3] >= 0.999,
+        depthTest: true
+      });
+    }
+    mat.userData = {
+      ...(mat.userData || {}),
+      __automindTextureRequested: requestedTexture,
+      __automindTextureResolved: false,
+      __automindTextureCandidates: candidates.slice(),
+      __automindSourceRgba: rgba.slice(),
+      __automindViewportNoFog: !!requestedTexture
+    };
+  }
+
+  if ('toneMapped' in mat) mat.toneMapped = false;
+  if ('blending' in mat) mat.blending = THREE.NormalBlending;
+  if ('premultipliedAlpha' in mat) mat.premultipliedAlpha = false;
+  stampMaterialTextureState(mat);
+  mat.needsUpdate = true;
+  return mat;
+}
+function geometryUsesRepeatedUVs(geometry) {
+  const uv = geometry?.attributes?.uv;
+  if (!uv?.array || !Number.isFinite(uv.count) || uv.count < 1) return false;
+  const a = uv.array;
+  let minU = Infinity, minV = Infinity, maxU = -Infinity, maxV = -Infinity;
+  for (let i = 0; i + 1 < a.length; i += uv.itemSize || 2) {
+    const u = Number(a[i]), v = Number(a[i + 1]);
+    if (!Number.isFinite(u) || !Number.isFinite(v)) continue;
+    minU = Math.min(minU, u); minV = Math.min(minV, v);
+    maxU = Math.max(maxU, u); maxV = Math.max(maxV, v);
+  }
+  return minU < -EPS || minV < -EPS || maxU > 1 + EPS || maxV > 1 + EPS;
+}
+
+function configureMaterialForGeometry(mat, geometry) {
+  if (!mat?.map) return;
+  // CAD OBJ files occasionally use tiled UVs. ClampToEdge samples the texture's
+  // black border for every coordinate outside [0,1], creating the exact black
+  // component symptom reported in the MJCF viewer. Preserve regular atlas maps,
+  // but enable repeat only for geometry that demonstrably needs it.
+  if (geometryUsesRepeatedUVs(geometry)) {
+    mat.map.wrapS = THREE.RepeatWrapping;
+    mat.map.wrapT = THREE.RepeatWrapping;
+    mat.map.needsUpdate = true;
+    mat.userData = mat.userData || {};
+    mat.userData.__automindRepeatUVs = true;
+  }
+}
+
+function applyMaterial(root, material, linkName, assetKey, assetToMeshes) {
+  root.traverse(o => {
+    if (!o?.isMesh) return;
+    const m = material?.clone ? material.clone() : material;
+    // Three r132 normally copies map in Material.clone(), but set it explicitly
+    // because it is critical for CAD colour swatches transported as PNG textures.
+    if (material?.map) m.map = material.map;
+    if (material?.color && m?.color?.copy) m.color.copy(material.color);
+    configureMaterialForGeometry(m, o.geometry);
+    stampMaterialTextureState(m);
+    if (m?.map) { try { m.map.needsUpdate = true; } catch (_) {} }
+    if (m) m.needsUpdate = true;
+    o.material = m;
+    o.castShadow = true; o.receiveShadow = true;
+    o.userData.__linkName = linkName;
+    o.userData.__assetKey = assetKey;
+    const arr = assetToMeshes.get(assetKey) || [];
+    arr.push(o); assetToMeshes.set(assetKey, arr);
+  });
+}
+function primitiveMesh(node, material) {
+  const type = String(node?.getAttribute?.('type') || 'sphere').toLowerCase();
+  const s = parseVec(node?.getAttribute?.('size'), [0.05, 0.05, 0.05]);
+  let geo = null;
+  if (type === 'box') geo = new THREE.BoxGeometry(2 * s[0], 2 * s[1], 2 * s[2]);
+  else if (type === 'cylinder') geo = new THREE.CylinderGeometry(s[0], s[0], 2 * (s[1] || s[0]), 24);
+  else if (type === 'capsule' && THREE.CapsuleGeometry) geo = new THREE.CapsuleGeometry(s[0], Math.max(0, 2 * (s[1] || s[0]) - 2 * s[0]), 8, 20);
+  else if (type === 'plane') geo = new THREE.PlaneGeometry(2 * s[0], 2 * s[1]);
+  else geo = new THREE.SphereGeometry(s[0], 24, 16);
+  return new THREE.Mesh(geo, material);
+}
+function isMovable(type) { return /^(hinge|slide|ball|free)$/i.test(String(type || '')); }
+function clamp(v, lo, hi) {
+  if (Number.isFinite(lo)) v = Math.max(lo, v);
+  if (Number.isFinite(hi)) v = Math.min(hi, v);
+  return v;
+}
+function isSingleToken(s) { return /^\S+$/.test(String(s || '').trim()); }
+function isPhysicalConnect(body0, body1, name = '') {
+  const a = String(body0 || '').toLowerCase();
+  const b = String(body1 || '').toLowerCase();
+  const n = String(name || '').toLowerCase();
+  const gearA = a.includes('gear');
+  const gearB = b.includes('gear');
+  // Gear meshing is represented by equality/joint, not equality/connect. A
+  // connect between gear bodies over-constrains a gripper and was an exporter bug.
+  if (gearA && gearB) return false;
+  if ((gearA && b.includes('base_gear')) || (gearB && a.includes('base_gear'))) return false;
+  if (n.includes('gear') && (gearA || gearB)) return false;
+  return true;
+}
+function solveDense(A, b) {
+  const n = b.length;
+  const M = A.map((r, i) => r.slice().concat([b[i]]));
+  for (let c = 0; c < n; c++) {
+    let pivot = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[pivot][c])) pivot = r;
+    if (Math.abs(M[pivot][c]) < 1e-13) return null;
+    if (pivot !== c) [M[pivot], M[c]] = [M[c], M[pivot]];
+    const inv = 1 / M[c][c];
+    for (let j = c; j <= n; j++) M[c][j] *= inv;
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c];
+      if (!f) continue;
+      for (let j = c; j <= n; j++) M[r][j] -= f * M[c][j];
+    }
+  }
+  return M.map(r => r[n]);
+}
+
+class MJCFModel extends THREE.Group {
+  constructor(name = 'AutoMindMJCF') {
+    super();
+    this.name = name;
+    this.links = {};
+    this._linkInfo = {
+      __world__: { name: '__world__', group: this, currentMatrix: new THREE.Matrix4(), isWorld: true }
+    };
+    this.joints = {};
+    this.loopJoints = [];
+    this.couplings = [];
+    this.solverHints = [];
+    this.assetToMeshes = new Map();
+    this.parentJointByLink = new Map();
+    this.jointChainByLink = new Map();
+    this.manipulableJointByLink = new Map();
+    this._allJoints = [];
+    this._lastCommandJoint = null;
+    this.isDraggingJoint = false;
+    this.activeJointForDrag = null;
+    this.isSolvingLoops = false;
+    this.pinnedSolverJointName = '';
+    this.lastLoopSolve = null;
+    this.closureAffectingJointNames = new Set();
+    this.userData.__model = this;
+    this.userData.__isMJCFModel = true;
+  }
+
+  _setJointScalar(j, value) {
+    if (!j || !j.movable) return;
+    const v = clamp(Number(value) || 0, j.lower, j.upper);
+    j.value = v;
+    if (/slide/i.test(j.type)) {
+      j.position = v;
+      j.motionGroup.position.copy(j.axis.clone().multiplyScalar(v));
+      j.motionGroup.quaternion.identity();
+    } else if (/hinge/i.test(j.type)) {
+      j.angle = v;
+      j.motionGroup.position.set(0, 0, 0);
+      j.motionGroup.quaternion.setFromAxisAngle(j.axis, v);
+    }
+    j.motionGroup.updateMatrix();
+  }
+
+  _applyCouplings() {
+    // Apply equality/joint relations repeatedly. A short fixed-point pass supports
+    // chains of dependent joints without allowing the DLS solver to fight them.
+    for (let pass = 0; pass < 8; pass++) {
+      for (const c of this.couplings || []) {
+        if (!/^linear$/i.test(c?.type || 'linear')) continue;
+        const dst = this.joints[c.dependentJoint];
+        const src = this.joints[c.masterJoint];
+        if (!dst || !src || dst === src) continue;
+        this._setJointScalar(dst, (c.offset || 0) + (c.ratio || 0) * (src.value || 0));
+      }
+    }
+  }
+
+  _refreshLinkMatrices() {
+    this.updateMatrixWorld(true);
+    for (const info of Object.values(this._linkInfo || {})) {
+      if (info?.group) info.currentMatrix.copy(info.group.matrixWorld);
+    }
+  }
+
+  _modelScale() {
+    if (Number.isFinite(this._closureScale) && this._closureScale > EPS) return this._closureScale;
+    const box = new THREE.Box3().setFromObject(this);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const d = Math.max(size.x, size.y, size.z, 1e-3);
+    this._closureScale = d;
+    return d;
+  }
+
+  _activeSolverLoops() {
+    return (this.loopJoints || []).filter(loop => {
+      if (!loop || loop.active === false || loop.solve === false) return false;
+      if (!this._linkInfo?.[loop.body0] || !this._linkInfo?.[loop.body1]) return false;
+      // A direct tree joint already carries this pair. Treat duplicate equality
+      // declarations only as diagnostics/decoration, never as a second hard loop.
+      const duplicateTreeJoint = (this._allJoints || []).some(j => j && j.tree &&
+        ((j.body0 === loop.body0 && j.body1 === loop.body1) || (j.body0 === loop.body1 && j.body1 === loop.body0)));
+      return !duplicateTreeJoint;
+    });
+  }
+
+  _frameForLoopSide(loop, side) {
+    const info = this._linkInfo?.[side === 0 ? loop.body0 : loop.body1];
+    if (!info) return new THREE.Matrix4();
+    const local = side === 0 ? loop.localFrame0 : loop.localFrame1;
+    if (local?.isMatrix4) return info.currentMatrix.clone().multiply(local);
+    const pos = side === 0 ? loop.localPos0 : loop.localPos1;
+    const quat = side === 0 ? loop.localQuat0 : loop.localQuat1;
+    const m = new THREE.Matrix4().identity();
+    if (pos || quat) {
+      const p = new THREE.Vector3(...(pos || [0, 0, 0]));
+      const q = new THREE.Quaternion(...(quat || [0, 0, 0, 1]));
+      if (q.lengthSq() < EPS) q.identity(); else q.normalize();
+      m.compose(p, q, new THREE.Vector3(1, 1, 1));
+    }
+    return info.currentMatrix.clone().multiply(m);
+  }
+
+  _loopAxisResidual(a, b, weight = 1) {
+    const za = new THREE.Vector3(0, 0, 1).transformDirection(a).normalize();
+    const zb = new THREE.Vector3(0, 0, 1).transformDirection(b).normalize();
+    if (za.lengthSq() < EPS || zb.lengthSq() < EPS) return [0, 0, 0];
+    const cross = new THREE.Vector3().crossVectors(za, zb);
+    return [cross.x * weight, cross.y * weight, cross.z * weight];
+  }
+
+  _loopResidual(maxConstraints = Infinity) {
+    this._refreshLinkMatrices();
+    const e = [];
+    const scale = this._modelScale();
+    const axisWeight = Math.min(Math.max(scale * 0.35, 1e-4), 0.05);
+    const weight = this.isDraggingJoint ? 0.72 : 0.82;
+    let count = 0;
+    for (const loop of this._activeSolverLoops()) {
+      if (count++ >= maxConstraints) break;
+      const a = this._frameForLoopSide(loop, 0);
+      const b = this._frameForLoopSide(loop, 1);
+      const pa = new THREE.Vector3().setFromMatrixPosition(a);
+      const pb = new THREE.Vector3().setFromMatrixPosition(b);
+      e.push((pb.x - pa.x) * weight, (pb.y - pa.y) * weight, (pb.z - pa.z) * weight);
+
+      // equality/connect closes only the anchor position in raw MJCF. For CAD
+      // gripper loops that leaves a rotational nullspace in a purely kinematic
+      // viewer solver. Add a light axis regularizer from the stored loop frames
+      // so the solve follows pin-axis closure more like the USD/URDF viewers.
+      if (/^connect$/i.test(loop.type || '')) {
+        const ar = this._loopAxisResidual(a, b, axisWeight * 0.35 * weight);
+        e.push(ar[0], ar[1], ar[2]);
+      }
+
+      // equality/weld constrains the full relative pose.
+      if (/^weld$/i.test(loop.type || '')) {
+        const torqueScale = Number.isFinite(loop.torquescale) ? Math.max(0, loop.torquescale) : 1;
+        if (torqueScale > EPS) {
+          const qa = new THREE.Quaternion().setFromRotationMatrix(a).normalize();
+          const qb = new THREE.Quaternion().setFromRotationMatrix(b).normalize();
+          const qerr = qa.clone().invert().multiply(qb).normalize();
+          if (qerr.w < 0) qerr.set(-qerr.x, -qerr.y, -qerr.z, -qerr.w);
+          const angularWeight = axisWeight * torqueScale;
+          e.push(2 * qerr.x * angularWeight * weight, 2 * qerr.y * angularWeight * weight, 2 * qerr.z * angularWeight * weight);
+        }
+      }
+    }
+    return e;
+  }
+
+  _loopErrorNorm(e) {
+    if (!e?.length) return 0;
+    let s = 0;
+    for (const v of e) s += v * v;
+    return Math.sqrt(s / Math.max(1, e.length / 3));
+  }
+
+  _jointAffectsLink(joint, linkName) {
+    let cur = linkName;
+    let guard = 0;
+    while (cur && guard++ < 256) {
+      const chain = this.jointChainByLink.get(cur) || [this.parentJointByLink.get(cur)].filter(Boolean);
+      if (!chain.length) return false;
+      if (chain.some(p => p === joint || p?.name === joint?.name)) return true;
+      cur = chain[0]?.parent || '';
+    }
+    return false;
+  }
+
+  _rebuildClosureCaches() {
+    this.closureAffectingJointNames = new Set();
+    for (const loop of this._activeSolverLoops()) {
+      for (const j of this._allJoints || []) {
+        if (!j?.movable || !j.tree || j.role === 'loop') continue;
+        if (this._jointAffectsLink(j, loop.body0) || this._jointAffectsLink(j, loop.body1)) {
+          this.closureAffectingJointNames.add(j.name);
+        }
+      }
+    }
+    this.manipulableJointByLink = new Map();
+  }
+
+  _passiveLoopSolverJoints() {
+    const limit = this.isDraggingJoint ? 48 : 72;
+    const out = (this._allJoints || []).filter(j => {
+      if (!j?.movable || !j.tree || j.role === 'loop' || j.dependent) return false;
+      if (this.pinnedSolverJointName && j.name === this.pinnedSolverJointName) return false;
+      if (this.activeJointForDrag && j.name === this.activeJointForDrag.name) return false;
+      return this.closureAffectingJointNames?.has(j.name);
+    });
+    return out.slice(0, limit);
+  }
+
+  _solveLoopClosures() {
+    const loops = this._activeSolverLoops();
+    if (!loops.length || this.isSolvingLoops) return;
+    if (!this.closureAffectingJointNames?.size) this._rebuildClosureCaches();
+    const variables = this._passiveLoopSolverJoints();
+    const maxConstraints = this.isDraggingJoint ? 420 : 2000;
+    if (!variables.length) {
+      this.lastLoopSolve = { residual: this._loopErrorNorm(this._loopResidual(maxConstraints)), vars: 0, iterations: 0, constraints: loops.length };
+      return;
+    }
+
+    this.isSolvingLoops = true;
+    try {
+      const maxIter = this.isDraggingJoint ? 8 : 18;
+      const stopResidual = this.isDraggingJoint ? 2.5e-4 : 3.5e-5;
+      const relaxation = this.isDraggingJoint ? 0.52 : 0.72;
+      let lambda = this.isDraggingJoint ? 1.2e-2 : 4e-3;
+      let residual = Infinity;
+
+      for (let iter = 0; iter < maxIter; iter++) {
+        this._applyCouplings();
+        const e0 = this._loopResidual(maxConstraints);
+        residual = this._loopErrorNorm(e0);
+        if (!e0.length || residual < stopResidual) {
+          this.lastLoopSolve = { residual, vars: variables.length, iterations: iter, constraints: loops.length };
+          break;
+        }
+
+        const m = e0.length;
+        const n = variables.length;
+        const J = Array.from({ length: m }, () => Array(n).fill(0));
+        for (let c = 0; c < n; c++) {
+          const j = variables[c];
+          const old = j.value || 0;
+          const eps = /slide/i.test(j.type || '') ? 1e-5 : 1e-4;
+          this._setJointScalar(j, old + eps);
+          this._applyCouplings();
+          const e1 = this._loopResidual(maxConstraints);
+          this._setJointScalar(j, old);
+          this._applyCouplings();
+          for (let r = 0; r < m; r++) J[r][c] = ((e1[r] ?? e0[r]) - e0[r]) / eps;
+        }
+
+        const A = Array.from({ length: n }, () => Array(n).fill(0));
+        const rhs = Array(n).fill(0);
+        for (let r = 0; r < m; r++) {
+          for (let i = 0; i < n; i++) {
+            rhs[i] -= J[r][i] * e0[r];
+            for (let k = 0; k < n; k++) A[i][k] += J[r][i] * J[r][k];
+          }
+        }
+        for (let i = 0; i < n; i++) A[i][i] += lambda;
+        const dq = solveDense(A, rhs);
+        if (!dq) break;
+
+        const oldValues = variables.map(j => j.value || 0);
+        let maxStep = 0;
+        for (let i = 0; i < n; i++) {
+          const j = variables[i];
+          const limit = /slide/i.test(j.type || '') ? 0.004 : (this.isDraggingJoint ? 0.08 : 0.12);
+          const step = THREE.MathUtils.clamp((Number(dq[i]) || 0) * relaxation, -limit, limit);
+          this._setJointScalar(j, oldValues[i] + step);
+          maxStep = Math.max(maxStep, Math.abs(step));
+        }
+        this._applyCouplings();
+        const nextResidual = this._loopErrorNorm(this._loopResidual(maxConstraints));
+        if (nextResidual > residual * 1.15) {
+          for (let i = 0; i < n; i++) this._setJointScalar(variables[i], oldValues[i]);
+          this._applyCouplings();
+          lambda *= 10;
+        } else {
+          residual = nextResidual;
+          lambda = Math.max(lambda * 0.6, 1e-7);
+        }
+        this.lastLoopSolve = { residual, vars: variables.length, iterations: iter + 1, constraints: loops.length };
+        if (maxStep < 5e-8) break;
+      }
+    } finally {
+      this.isSolvingLoops = false;
+      this._refreshLinkMatrices();
+    }
+  }
+
+  _snapshotMovableJointValues() {
+    return (this._allJoints || []).filter(j => j?.movable && j.tree && j.role !== 'loop').map(j => [j, j.value || 0]);
+  }
+
+  _restoreMovableJointValues(snapshot) {
+    for (const [j, value] of snapshot || []) this._setJointScalar(j, value);
+    this._applyCouplings();
+  }
+
+  _dragFeasibleResidualLimit(baseResidual) {
+    const baseline = Number.isFinite(baseResidual) ? baseResidual : 0;
+    return Math.max(1.5e-3, baseline * 2.75);
+  }
+
+  _attemptConstrainedDragValue(joint, value, baseSnapshot) {
+    this._restoreMovableJointValues(baseSnapshot);
+    this._setJointScalar(joint, value);
+    this.applyPose();
+    const residual = this.lastLoopSolve?.residual ?? this._loopErrorNorm(this._loopResidual());
+    return { residual, value: joint.value || 0, snapshot: this._snapshotMovableJointValues() };
+  }
+
+  _applyConstrainedJointDrag(joint, targetValue) {
+    if (!joint) return false;
+    const startValue = joint.value || 0;
+    const baseSnapshot = this._snapshotMovableJointValues();
+    const baseResidual = this.lastLoopSolve?.residual ?? this._loopErrorNorm(this._loopResidual());
+    const limit = this._dragFeasibleResidualLimit(baseResidual);
+    const direct = this._attemptConstrainedDragValue(joint, targetValue, baseSnapshot);
+    if (!this._activeSolverLoops().length || direct.residual <= limit) {
+      this._restoreMovableJointValues(direct.snapshot);
+      this.applyPose();
+      return true;
+    }
+
+    let lo = 0;
+    let hi = 1;
+    let best = null;
+    for (let i = 0; i < 8; i++) {
+      const mid = (lo + hi) * 0.5;
+      const trial = this._attemptConstrainedDragValue(joint, startValue + (targetValue - startValue) * mid, baseSnapshot);
+      if (trial.residual <= limit) { best = trial; lo = mid; }
+      else hi = mid;
+    }
+    if (best) this._restoreMovableJointValues(best.snapshot);
+    else this._restoreMovableJointValues(baseSnapshot);
+    this.applyPose();
+    return !!best;
+  }
+
+  setJointValue(name, value) {
+    const j = typeof name === 'string' ? this.joints[name] : name;
+    if (!j || !j.movable || j.dependent || j.role === 'loop') return;
+    this._lastCommandJoint = j;
+    const val = clamp(Number(value) || 0, j.lower, j.upper);
+    if (this.isDraggingJoint && !this.isSolvingLoops) {
+      this.activeJointForDrag = this.activeJointForDrag || j;
+      this._applyConstrainedJointDrag(j, val);
+      return;
+    }
+    this._setJointScalar(j, val);
+    this.applyPose();
+  }
+
+  applyPose() {
+    this._applyCouplings();
+    this._solveLoopClosures();
+    this._applyCouplings();
+    this._refreshLinkMatrices();
+  }
+
+  getManipulableJointForLinkName(linkName) {
+    if (this.manipulableJointByLink.has(linkName)) return this.manipulableJointByLink.get(linkName);
+    let cur = linkName;
+    let guard = 0;
+    while (cur && guard++ < 128) {
+      const j = this.parentJointByLink.get(cur);
+      if (!j) break;
+      if (j.movable && !j.dependent) {
+        this.manipulableJointByLink.set(linkName, j);
+        return j;
+      }
+      cur = j.parent;
+    }
+    return null;
+  }
+
+  getJointWorldPivot(joint) {
+    const j = typeof joint === 'string' ? this.joints[joint] : joint;
+    const out = new THREE.Vector3();
+    if (j?.pivotGroup) return j.pivotGroup.getWorldPosition(out);
+    return out;
+  }
+
+  getJointWorldAxis(joint) {
+    const j = typeof joint === 'string' ? this.joints[joint] : joint;
+    const axis = j?.axis ? j.axis.clone() : new THREE.Vector3(0, 0, 1);
+    if (j?.pivotGroup) {
+      const q = new THREE.Quaternion();
+      j.pivotGroup.getWorldQuaternion(q);
+      axis.applyQuaternion(q);
+    }
+    return axis.normalize();
+  }
+
+  beginInteractiveDrag(joint = null) {
+    this.isDraggingJoint = true;
+    this.activeJointForDrag = joint || this.activeJointForDrag || null;
+    this._lastCommandJoint = joint || this._lastCommandJoint;
+  }
+
+  endInteractiveDrag(joint = null) {
+    this.pinnedSolverJointName = (joint || this.activeJointForDrag || null)?.name || '';
+    this.activeJointForDrag = null;
+    this.isDraggingJoint = false;
+    this.applyPose();
+    this.pinnedSolverJointName = '';
+  }
+}
+
+function findMJCFText(opts, raw) {
+  const explicit = opts.mjcfContent || opts.mjcfText || opts.xmlContent || opts.xmlText || opts.robotXml || '';
+  if (explicit && /<mujoco[\s>]/i.test(String(explicit))) return { key: opts.mjcfPath || 'model.xml', text: String(explicit) };
+  const candidates = [];
+  for (const [key, value] of Object.entries(raw || {})) {
+    const t = xmlTextFromValue(value);
+    if (!/<mujoco[\s>]/i.test(t)) continue;
+    let score = 0;
+    if (/\.xml$/i.test(key)) score += 100;
+    if (/model|mjcf|robot/i.test(key)) score += 50;
+    if (/assets\//i.test(key)) score -= 300;
+    candidates.push({ key, text: t, score });
+  }
+  candidates.sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  return candidates[0] || { key: '', text: '' };
+}
+function parseAssets(root, raw, db, meshdir, texturedir) {
+  const meshes = new Map(), textures = new Map(), materials = new Map();
+  const asset = firstChild(root, 'asset');
+  for (const n of Array.from(asset?.children || [])) {
+    const tag = localName(n), name = n.getAttribute('name') || '';
+    if (!name) continue;
+    if (tag === 'mesh') {
+      const file = n.getAttribute('file') || '';
+      meshes.set(name, { name, file, candidates: assetCandidates(file, meshdir) });
+    } else if (tag === 'texture') {
+      const file = n.getAttribute('file') || '';
+      textures.set(name, {
+        name,
+        file,
+        candidates: assetCandidates(file || name, texturedir),
+        flipY: String(n.getAttribute('flipY') || '').trim().toLowerCase() !== 'false'
+      });
+    } else if (tag === 'material') {
+      materials.set(name, {
+        name,
+        rgba: colorFromRgba(n.getAttribute('rgba')),
+        texture: n.getAttribute('texture') || '',
+        texrepeat: parseNums(n.getAttribute('texrepeat'), 2, 1),
+        texturedir
+      });
+    }
+  }
+  for (const mat of materials.values()) {
+    const tex = textures.get(mat.texture);
+    mat.textureCandidates = tex?.candidates || (mat.texture ? assetCandidates(mat.texture, texturedir) : []);
+    mat.flipY = tex?.flipY !== false;
+  }
+  return { meshes, textures, materials };
+}
+function isCollisionOnlyGeom(node) {
+  const className = String(node?.getAttribute?.('class') || '').trim().toLowerCase();
+  const name = String(node?.getAttribute?.('name') || '').trim().toLowerCase();
+  const group = Number(node?.getAttribute?.('group'));
+  const material = String(node?.getAttribute?.('material') || '').trim().toLowerCase();
+  // MJCF defaults are inherited by MuJoCo at compile time, but this lightweight
+  // viewer parses the XML directly. Therefore class="collision" does NOT expose
+  // group="3" on the raw node. Render only the visual copy: otherwise the
+  // duplicate collision mesh sits exactly over the textured mesh and its missing
+  // material appears as a black silhouette.
+  return className.split(/\s+/).includes('collision') ||
+    /^collision(?:[_:.-]|$)/.test(name) ||
+    (group === 3) ||
+    (/collision/.test(name) && !material);
+}
+
+async function addGeom(node, content, model, assets, raw, db, linkName) {
+  if (isCollisionOnlyGeom(node)) return;
+  const type = String(node.getAttribute('type') || 'sphere').toLowerCase();
+  const materialName = node.getAttribute('material') || '';
+  const material = await makeMaterial(assets.materials.get(materialName) || null, db, node);
+  const assetKey = node.getAttribute('mesh') || node.getAttribute('name') || linkName;
+  // One visual wrapper per geometry, positioned in body-local coordinates. It is
+  // intentionally not the kinematic body: explode moves this wrapper only.
+  const visual = new THREE.Group();
+  visual.name = 'visual_root:' + (node.getAttribute('name') || assetKey);
+  visual.userData.__automindExplodePart = true;
+  visual.userData.__linkName = linkName;
+  visual.userData.__assetKey = assetKey;
+  setPose(visual, node);
+  content.add(visual);
+  model._visualRoots = model._visualRoots || [];
+  model._visualRoots.push(visual);
+
+  if (type === 'mesh') {
+    const meshDef = assets.meshes.get(node.getAttribute('mesh') || '');
+    if (!meshDef) { content.remove(visual); return; }
+    const hit = assetText(raw, meshDef.candidates);
+    if (!hit.text) { content.remove(visual); return; }
+    await ensureObjLoader();
+    let root = null;
+    try { root = new THREE.OBJLoader().parse(hit.text); } catch (_) { root = null; }
+    if (!root) { content.remove(visual); return; }
+    visual.add(root);
+    applyMaterial(root, material, linkName, meshDef.file || assetKey, model.assetToMeshes);
+  } else {
+    const mesh = primitiveMesh(node, material);
+    mesh.userData.__linkName = linkName;
+    mesh.userData.__assetKey = assetKey;
+    visual.add(mesh);
+    const arr = model.assetToMeshes.get(assetKey) || []; arr.push(mesh); model.assetToMeshes.set(assetKey, arr);
+  }
+}
+function registerJoint(model, node, parentName, chainParent) {
+  const name = node.getAttribute('name') || `joint_${Object.keys(model.joints).length}`;
+  const type = String(node.getAttribute('type') || (localName(node) === 'freejoint' ? 'free' : 'hinge')).toLowerCase();
+  const axisV = parseVec(node.getAttribute('axis'), [0, 0, 1]);
+  const axis = new THREE.Vector3(axisV[0], axisV[1], axisV[2]).normalize();
+  const range = parseNums(node.getAttribute('range'), 2, NaN);
+  const limited = boolAttr(node, 'limited', type !== 'hinge');
+  const pivot = new THREE.Group(); pivot.name = 'joint_pivot:' + name;
+  const p = parseVec(node.getAttribute('pos'), [0, 0, 0]); pivot.position.set(p[0], p[1], p[2]);
+  const motion = new THREE.Group(); motion.name = 'joint_motion:' + name;
+  const inverse = new THREE.Group(); inverse.name = 'joint_inverse:' + name; inverse.position.set(-p[0], -p[1], -p[2]);
+  chainParent.add(pivot); pivot.add(motion); motion.add(inverse);
+  const joint = {
+    name, type, jointType: type, schema: /slide/i.test(type) ? 'PrismaticJoint' : 'RevoluteJoint',
+    parent: parentName, child: '', body0: parentName, body1: '', movable: isMovable(type) && (type === 'hinge' || type === 'slide'),
+    tree: true, role: 'tree', axis, lower: limited ? range[0] : -Infinity, upper: limited ? range[1] : Infinity,
+    value: 0, angle: 0, position: 0, pivotGroup: pivot, motionGroup: motion, originGroup: pivot,
+    directUserControl: true, independent: true
+  };
+  model.joints[name] = joint; model._allJoints.push(joint);
+  return { joint, contentParent: inverse };
+}
+async function parseBody(node, parentContent, model, assets, raw, db, parentName, serial) {
+  const name = node.getAttribute('name') || `body_${serial.value++}`;
+  const bodyPose = new THREE.Group();
+  bodyPose.name = name;
+  bodyPose.userData.__linkName = name;
+  bodyPose.userData.__assetKey = name;
+  setPose(bodyPose, node);
+  parentContent.add(bodyPose);
+  model.links[name] = bodyPose;
+  model._linkInfo[name] = { name, group: bodyPose, currentMatrix: new THREE.Matrix4() };
+
+  let content = bodyPose;
+  const bodyJoints = [];
+  const jointNodes = Array.from(node.children || []).filter(n => ['joint', 'freejoint'].includes(localName(n)));
+  for (const jn of jointNodes) {
+    const r = registerJoint(model, jn, parentName, content);
+    content = r.contentParent;
+    bodyJoints.push(r.joint);
+  }
+  if (bodyJoints.length) {
+    for (const joint of bodyJoints) {
+      joint.child = name;
+      joint.body1 = name;
+    }
+    // MJCF allows several scalar joints on one body. Preserve their complete
+    // chain so closed-loop DLS can use every DOF rather than only the first one.
+    model.jointChainByLink.set(name, bodyJoints);
+    model.parentJointByLink.set(name, bodyJoints[0]);
+  }
+  for (const g of childrenByName(node, 'geom')) await addGeom(g, content, model, assets, raw, db, name);
+  for (const child of childrenByName(node, 'body')) await parseBody(child, content, model, assets, raw, db, name, serial);
+  return bodyPose;
+}
+function parseEquality(root, model) {
+  const e = firstChild(root, 'equality');
+  for (const n of Array.from(e?.children || [])) {
+    const tag = localName(n);
+    if (tag === 'joint') {
+      const dependentJoint = n.getAttribute('joint1') || '';
+      const masterJoint = n.getAttribute('joint2') || '';
+      const p = parseNums(n.getAttribute('polycoef'), 5, 0);
+      const valid = isSingleToken(dependentJoint) && isSingleToken(masterJoint) && model.joints[dependentJoint] && model.joints[masterJoint];
+      const c = { name: n.getAttribute('name') || `coupling_${model.couplings.length}`, type: 'linear', dependentJoint, masterJoint, offset: p[0] || 0, ratio: p[1] || 0 };
+      if (!valid) { model.solverHints.push({ ...c, reason: 'MJCF equality/joint references a non-exportable or multi-joint solver hint.' }); continue; }
+      model.couplings.push(c);
+      model.joints[dependentJoint].dependent = true;
+      model.joints[dependentJoint].directUserControl = false;
+      continue;
+    }
+
+    if (tag !== 'connect' && tag !== 'weld') continue;
+    // MJCF calls the first body body1 and the second body body2. Internally the
+    // viewer uses body0/body1 to avoid colliding with DOM attribute terminology.
+    // An omitted body2 is the MuJoCo world body.
+    const body0 = n.getAttribute('body1') || '';
+    const body1 = n.getAttribute('body2') || '__world__';
+    const name = n.getAttribute('name') || `loop_${model.loopJoints.length}`;
+    if (!model._linkInfo[body0] || !model._linkInfo[body1] || !isPhysicalConnect(body0, body1, name)) continue;
+
+    const anchor = parseVec(n.getAttribute('anchor'), [0, 0, 0]);
+    const relpose = parseNums(n.getAttribute('relpose'), 7, 0);
+    const relposeQuat = relpose.slice(3, 7);
+    const relposeQuatNorm = Math.hypot(...relposeQuat);
+    model.loopJoints.push({
+      name,
+      type: tag,
+      role: 'loop',
+      tree: false,
+      drawable: true,
+      active: boolAttr(n, 'active', true),
+      predecessor: body0,
+      successor: body1,
+      parent: body0,
+      child: body1,
+      body0,
+      body1,
+      // Crucial MJCF semantics: equality/connect anchor is expressed in body1
+      // (our body0) local coordinates, not world coordinates. For weld the
+      // same attribute is relative to body2 (our body1).
+      anchor,
+      hasAnchor: n.hasAttribute('anchor'),
+      relpose,
+      hasRelpose: relposeQuatNorm > EPS,
+      torquescale: numAttr(n, 'torquescale', 1),
+      localPos0: null,
+      localPos1: null,
+      localQuat0: null,
+      localQuat1: null,
+      localFrame0: null,
+      localFrame1: null,
+      hasSuccessorOrigin: true
+    });
+  }
+}
+
+function frameMatrix(pos = [0, 0, 0], quat = [0, 0, 0, 1]) {
+  const p = new THREE.Vector3(pos[0] || 0, pos[1] || 0, pos[2] || 0);
+  const q = new THREE.Quaternion(quat[0] || 0, quat[1] || 0, quat[2] || 0, quat[3] ?? 1);
+  if (q.lengthSq() < EPS) q.identity(); else q.normalize();
+  return new THREE.Matrix4().compose(p, q, new THREE.Vector3(1, 1, 1));
+}
+
+function chooseConnectAnchorLocalFrame(model, loop, bodyA) {
+  // Standard MJCF semantics: equality/connect anchor is body1-local. Some early
+  // AutoMind BUILD170 exports accidentally wrote the CAD/world pivot directly
+  // into anchor. Detect only the unmistakable case where treating it as local
+  // throws the point well outside the whole assembled model while using it as a
+  // world point lies inside the model. This preserves normal MJCF files and lets
+  // legacy exports display correctly in the viewer.
+  const authored = new THREE.Vector3(...(loop.anchor || [0, 0, 0]));
+  const localFrame = frameMatrix([authored.x, authored.y, authored.z], [0, 0, 0, 1]);
+  const worldAsLocal = bodyA.currentMatrix.clone().multiply(localFrame);
+  const pAsLocal = new THREE.Vector3().setFromMatrixPosition(worldAsLocal);
+  const pAsWorld = authored.clone();
+  const bounds = new THREE.Box3().setFromObject(model);
+  const size = new THREE.Vector3(); bounds.getSize(size);
+  const span = Math.max(size.x, size.y, size.z, 1e-4);
+  const padded = bounds.clone().expandByScalar(Math.max(0.002, span * 0.20));
+  const looksLegacyWorld = Number.isFinite(pAsWorld.x) && padded.containsPoint(pAsWorld) && !padded.containsPoint(pAsLocal);
+  if (looksLegacyWorld) {
+    const local = pAsWorld.applyMatrix4(bodyA.currentMatrix.clone().invert());
+    loop.anchorFrame = 'legacy_world_corrected_for_viewer';
+    loop.authoredAnchor = loop.anchor.slice();
+    return frameMatrix([local.x, local.y, local.z], [0, 0, 0, 1]);
+  }
+  loop.anchorFrame = 'body1_local';
+  return localFrame;
+}
+
+function storeLoopFrame(loop, side, matrix) {
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  matrix.decompose(p, q, scale);
+  if (side === 0) {
+    loop.localPos0 = [p.x, p.y, p.z];
+    loop.localQuat0 = [q.x, q.y, q.z, q.w];
+    loop.localFrame0 = matrix.clone();
+  } else {
+    loop.localPos1 = [p.x, p.y, p.z];
+    loop.localQuat1 = [q.x, q.y, q.z, q.w];
+    loop.localFrame1 = matrix.clone();
+  }
+}
+
+function finalizeLoopAnchors(model) {
+  model._refreshLinkMatrices();
+  for (const loop of model.loopJoints || []) {
+    const a = model._linkInfo?.[loop.body0];
+    const b = model._linkInfo?.[loop.body1];
+    if (!a || !b) continue;
+    const invA = a.currentMatrix.clone().invert();
+    const invB = b.currentMatrix.clone().invert();
+
+    if (/^connect$/i.test(loop.type || '')) {
+      // equality/connect: anchor is authored in body1/body0's local frame. The
+      // compiler derives body2's anchor from qpos0; reproduce that derivation.
+      const localA = chooseConnectAnchorLocalFrame(model, loop, a);
+      const worldAnchor = a.currentMatrix.clone().multiply(localA);
+      const localB = invB.multiply(worldAnchor);
+      storeLoopFrame(loop, 0, localA);
+      storeLoopFrame(loop, 1, localB);
+      continue;
+    }
+
+    // equality/weld: a zero relpose quaternion means "use the reference pose".
+    // With explicit relpose, its position is the anchor in body1/body0 and its
+    // quaternion is body2's orientation relative to body1. The anchor attribute
+    // remains local to body2/body1.
+    let localA;
+    let localB;
+    if (loop.hasRelpose) {
+      const qWxyz = loop.relpose.slice(3, 7);
+      const q = [qWxyz[1], qWxyz[2], qWxyz[3], qWxyz[0]];
+      localA = frameMatrix(loop.relpose.slice(0, 3), q);
+      localB = frameMatrix(loop.anchor, [0, 0, 0, 1]);
+    } else {
+      localB = frameMatrix(loop.anchor, [0, 0, 0, 1]);
+      const worldAnchor = b.currentMatrix.clone().multiply(localB);
+      const posA = invA.multiply(worldAnchor);
+      // Align the body frames at the imported reference pose while retaining the
+      // correct weld point. This is the same default-reference policy as MuJoCo.
+      const qA = new THREE.Quaternion().setFromRotationMatrix(a.currentMatrix).invert();
+      const qB = new THREE.Quaternion().setFromRotationMatrix(b.currentMatrix);
+      const relative = qA.multiply(qB).normalize();
+      const p = new THREE.Vector3();
+      const ignoredQ = new THREE.Quaternion();
+      const ignoredS = new THREE.Vector3();
+      posA.decompose(p, ignoredQ, ignoredS);
+      localA = frameMatrix([p.x, p.y, p.z], [relative.x, relative.y, relative.z, relative.w]);
+    }
+    storeLoopFrame(loop, 0, localA);
+    storeLoopFrame(loop, 1, localB);
+  }
+  model._rebuildClosureCaches?.();
+}
+
+function parseActuators(root, model) {
+  const a = firstChild(root, 'actuator');
+  for (const n of Array.from(a?.children || [])) {
+    const joint = n.getAttribute('joint') || '';
+    const j = model.joints[joint];
+    if (!j) continue;
+    const range = parseNums(n.getAttribute('ctrlrange'), 2, NaN);
+    if (Number.isFinite(range[0])) j.lower = range[0];
+    if (Number.isFinite(range[1])) j.upper = range[1];
+    j.actuator = { type: localName(n), name: n.getAttribute('name') || '', kp: numAttr(n, 'kp', 0) };
+  }
+}
+
+export async function buildMJCFAssetDBFromOptions(opts = {}) {
+  const mjcfZip = opts.MJCF_Zip || opts.mjcfZip || opts.mjcfZipBase64 || opts.xmlZip || opts.zipBase64 || opts.zipDataUrl || '';
+  const xml = opts.mjcfContent || opts.mjcfText || opts.xmlContent || opts.xmlText || opts.robotXml || '';
+  const normalized = { ...opts, URDF_Zip: mjcfZip, urdfContent: xml, urdfPath: opts.mjcfPath || opts.xmlPath || 'model.xml' };
+  return buildURDFAssetDBFromOptions(normalized);
+}
+export async function loadMJCFModel(opts = {}) {
+  assertThree();
+  const raw = await buildMJCFAssetDBFromOptions(opts);
+  const found = findMJCFText(opts, raw);
+  if (!found.text) throw new Error('No MJCF <mujoco> XML was found. Pass mjcfContent/xmlContent or MJCF_Zip/assetDB.');
+  const xml = new DOMParser().parseFromString(found.text, 'application/xml');
+  const parseError = xml.querySelector('parsererror');
+  if (parseError) throw new Error('Invalid MJCF XML: ' + parseError.textContent.slice(0, 300));
+  const root = xml.querySelector('mujoco');
+  if (!root) throw new Error('MJCF root must be <mujoco>.');
+  const compiler = firstChild(root, 'compiler');
+  const meshdir = compiler?.getAttribute('meshdir') || 'assets';
+  const texturedir = compiler?.getAttribute('texturedir') || meshdir;
+  const db = buildAssetDB(raw);
+  const model = new MJCFModel(root.getAttribute('model') || 'AutoMindMJCF');
+  model.assetDB = db; model.sourcePath = found.key;
+  const assets = parseAssets(root, raw, db, meshdir, texturedir);
+  const worldbody = firstChild(root, 'worldbody');
+  if (!worldbody) throw new Error('MJCF has no <worldbody>.');
+  const serial = { value: 0 };
+  for (const body of childrenByName(worldbody, 'body')) await parseBody(body, model, model, assets, raw, db, '', serial);
+  for (const geom of childrenByName(worldbody, 'geom')) await addGeom(geom, model, model, assets, raw, db, 'world');
+  parseEquality(root, model);
+  finalizeLoopAnchors(model);
+  parseActuators(root, model);
+  model.applyPose();
+  await sleep(0);
+  return model;
+}
+
+export default { loadMJCFModel, buildMJCFAssetDBFromOptions };
