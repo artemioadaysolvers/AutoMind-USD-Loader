@@ -1,5 +1,0 @@
-BUILD177 validation summary
-- Synced loop decoration drawing with solver anchors by refreshing matrices and using _frameForLoopSide when present.
-- Strengthened unresolved-texture fallback so requested textures do not collapse into black silhouettes.
-- Expanded MJCF texture candidate probing paths for better parity with USD/URDF loaders.
-- Static validation only in CAAS: source patched successfully and zipped. The user's exact robot assets were not bundled with the viewer archive, so no full runtime regression with that gripper could be executed here.
