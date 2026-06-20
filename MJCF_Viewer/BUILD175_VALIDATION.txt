@@ -1,0 +1,18 @@
+AutoMind MJCF Viewer BUILD175 validation
+
+Root cause addressed
+- AutoMind generated MJCF defines visual and collision geoms using default classes.
+- The old viewer only inspected a literal group="3" attribute and therefore loaded collision duplicates when group was inherited through class="collision".
+- In Ghost mode, transparent duplicate geometry accumulated and appeared black.
+
+Changes
+- Skip collision/collider/contact geoms based on class, name prefix, or explicit group=3.
+- Create visual MJCF CAD materials with MeshBasicMaterial and a FrontSide texture-first contract. This avoids black visual output from OBJ assets without vertex normals while retaining PNG maps, rgba fallback, alpha, selection and wireframe controls.
+- Compute missing OBJ vertex normals once on load for downstream safety.
+- Removed the global WebGL uniform3fv monkey patch and per-frame material sanitization introduced in BUILD174.
+- Keep BUILD174 frozen grid and ground transforms.
+- Start in Solid instead of Ghost.
+
+Static checks
+- Node syntax check completed for all JavaScript modules.
+- ZIP contains one complete MJCF_Viewer folder.
