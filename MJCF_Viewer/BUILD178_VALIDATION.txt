@@ -1,0 +1,5 @@
+BUILD178 validation summary
+- Collision duplicate filter recognizes class="collision" before material/OBJ loading.
+- Legacy world-authored equality/connect anchors are corrected for viewer frame generation only when the body-local interpretation falls outside the assembled model while the authored point lies within it.
+- Static JavaScript syntax validation completed.
+- Exact robot assets were inspected: the issue is reproducible from the duplicated visual/collision geom pairs and two world-authored connect anchors in Robot_Gripper.xml.

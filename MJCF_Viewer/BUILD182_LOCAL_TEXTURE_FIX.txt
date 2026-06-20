@@ -1,0 +1,9 @@
+AutoMind MJCF Viewer BUILD182 — local bundle + CanvasTexture repair
+
+Fixes:
+1. CanvasTexture-backed decoding for base64 PNG/JPG/WebP assets before first render.
+2. Linear no-mipmap texture path to prevent incomplete-texture black silhouettes.
+3. Per-material texture diagnostics exposed as window.AutoMindMJCFTextureReport.
+4. MTL/MJCF Kd fallback for maps that decode as effectively all-black.
+5. Intended to be loaded by MJCF_Render_Script_LOCAL_VIEWER_TEXTURE_FIX.py using viewer_zip=...;
+   that bridge executes this exact ZIP locally rather than fetching an older GitHub commit.
