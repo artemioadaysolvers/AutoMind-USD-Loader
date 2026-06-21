@@ -1,0 +1,10 @@
+AutoMind MJCF Viewer BUILD175 validation
+
+Texture/material visibility repair:
+- MJCF OBJ texture creation now uses flipY=true, matching the established USD/URDF texture path.
+- Textured CAD meshes receive MeshBasicMaterial, preserving texture colour independent of scene lighting.
+- A requested but unresolved texture with black fallback rgba gets neutral visible CAD material instead of a black silhouette.
+- UVs outside [0,1] enable RepeatWrapping, avoiding clamp-to-black texture edges.
+
+Static checks:
+- node --check must pass for every JavaScript module.

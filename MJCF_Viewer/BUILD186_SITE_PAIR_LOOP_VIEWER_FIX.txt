@@ -1,0 +1,30 @@
+AutoMind MJCF Viewer BUILD186 — site-pair loop and selection-cage repair
+==========================================================================
+
+Problem fixed
+-------------
+Robot_Gripper BUILD180 expresses the two critical revolute loop closures with:
+  <connect site1="..." site2="..."/>
+for centre and a second collinear Z-axis point. MuJoCo correctly resolves that
+syntax, but the previous viewer only parsed body1/body2 equality endpoints. It
+therefore dropped all four valid site-pair connects and rendered the gripper as
+an unconstrained open tree.
+
+Changes
+-------
+1. Added named-site registration to the MJCF loader.
+2. Added native equality/connect site1/site2 support. Both site frames are now
+   used directly as the loop's local frames, exactly as required by the MJCF.
+3. The second collinear `*_axis_z` connect remains active in the DLS solver but
+   is not drawn as a separate visual loop. One physical pivot = one loop trace.
+4. Fixed selection collection so one clicked link does not include every nested
+   child body. This removes the large cyan Box3 selection cage around the whole
+   four-bar mechanism.
+5. A real drag now clears the selection cage when released; a click without
+   movement still keeps component selection.
+
+Expected result
+---------------
+- The viewer uses the same Pin:7 / Pin:4 site-pair closures as MuJoCo.
+- Jaw/link motion remains closed instead of drifting into an open mechanism.
+- No giant cyan wireframe cage appears after dragging a joint.

@@ -1,0 +1,16 @@
+BUILD184 — VIEWPORT TEXTURE PROXY FIX
+
+Symptoms fixed:
+- Component thumbnails rendered texture/color correctly.
+- Visible Colab viewport rendered the same mesh collection as black.
+
+Implementation:
+- Keeps original MJCF meshes for joints, selection, and raycasting.
+- Original visual materials no longer write framebuffer color/depth.
+- Adds a scene-level proxy mesh for each original visual mesh.
+- Proxy uses MeshBasicMaterial + the exact decoded map used by thumbnail renderer.
+- Before each visible frame, proxy copies source world transforms, visibility, opacity, and wireframe state.
+- Thumbnail scenes remain independent and unchanged.
+
+Expected console log:
+[AutoMind MJCF] Puente de texturas del viewport: { mappedProxyMeshes: 19, ... }
