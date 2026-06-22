@@ -1,0 +1,8 @@
+AutoMind MJCF Viewer BUILD221
+
+Fixes
+-----
+1. Shows every direct MJCF tree joint axis, including authored hinges whose CAD visual mesh is offset from the body frame.
+2. Detects a closed revolute loop only when the XML provides both equality/connect site pairs: one at the pivot centre and one collinear point on its axis.
+3. Draws that loop pivot as a cyan, read-only axis marker, so a satisfied connect constraint does not disappear merely because its orange residual has zero length.
+4. No MJCF XML, solver joint, equality/connect relation, coupling, selection rule, material or mechanism pose is changed.

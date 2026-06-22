@@ -1,0 +1,8 @@
+AutoMind MJCF Viewer BUILD220
+
+- qpos -> forward kinematics -> equality/connect projection -> one visual commit.
+- Stable central-difference DLS loop projection with pose regularization.
+- Hinge/slide pointer dragging follows a captured physical plane/axis, not a ray-depth approximation.
+- Infeasible dragging is limited before a visibly detached loop can be displayed.
+- Visual texture proxies, loop overlays, joint overlays and selection bounds refresh immediately after the committed pose.
+- BUILD212 contextual axis suppression remains enabled; the XML is never modified.
