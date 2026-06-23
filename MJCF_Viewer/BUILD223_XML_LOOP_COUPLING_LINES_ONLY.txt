@@ -1,0 +1,8 @@
+BUILD223: XML-only loops and couplings line overlays.
+
+Changes relative to BUILD222:
+- Removed floating bubble/card labels from loop and coupling overlays.
+- Show Loops now renders orange dashed loop routes with directional arrows only.
+- Show Couplings now renders green dashed coupling routes with directional arrows only.
+- The legacy residual loop segment batch is visually suppressed so the infographic route is the main visible loop overlay.
+- Detection remains XML-only: loop closures and couplings are derived exclusively from MJCF bodies, joints, equality blocks, and tendon definitions.
