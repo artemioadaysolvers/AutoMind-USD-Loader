@@ -1,7 +1,0 @@
-BUILD222 — XML LOOP + COUPLING INFOGRAPHICS
-
-Changes are presentation-only and sourced strictly from parsed MJCF XML:
-- Show Loops displays XML equality/connect and equality/weld closures as labelled green kinematic routes through the authored body tree.
-- Show Couplings displays equality/joint, equality/tendon, fixed-tendon joint relationships, and authored spatial tendon site paths.
-- Existing Show Joints behavior is intentionally untouched.
-- No XML, pose, solver, equality constraint, joint, actuator, material, selection, or drag behavior is modified.
